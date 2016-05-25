@@ -72,8 +72,8 @@ func flashLog() {
 func main() {
 	lognum := 0;
 
-	connchan := make(chan net.Conn, 1000)
-	logchan := make(chan logPack, 1000)
+	connchan := make(chan net.Conn, 128)
+	logchan := make(chan logPack, 128)
 
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, os.Interrupt)
