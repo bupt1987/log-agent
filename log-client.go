@@ -2,51 +2,49 @@ package main
 
 import (
 	"net"
-	"fmt"
 	"strconv"
 	"time"
 	"log"
+	"sync"
 )
 
 var SOCKET string = "/tmp/go-unix.socket"
 
 func main() {
 	errorNum := 0
-	count := 0
-	lenght := 100
-	golist := make(chan int, lenght)
-	exit := make(chan int, 1)
+	lenght := 1000
+
+	startime := time.Now().Unix()
+
+	var wg sync.WaitGroup
 
 	for j := 1; j <= lenght; j ++ {
-		golist <- j
-	}
-	for {
-		select {
-		case index := <-golist:
-			go func() {
-				defer func() {
-					exit <- 1
-				}()
-				conn, err := net.DialTimeout("unix", SOCKET, time.Second * 3)
-				if err != nil {
-					errorNum++
-					fmt.Println(err.Error())
-					return
-				}
-				defer conn.Close()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var conn net.Conn
+			var err error
 
-				for i := 1; i <= 10000; i ++ {
-					fmt.Fprint(conn, strconv.Itoa(i) + "\n")
-				}
+			conn, err = net.Dial("unix", SOCKET)
 
-				fmt.Println(index)
-			}()
-		case <-exit:
-			count++
-			if count >= lenght {
-				log.Print("error: ", errorNum)
+			if err != nil {
+				errorNum++
+				log.Println(err.Error())
 				return
 			}
-		}
+
+			defer conn.Close()
+			total := 100
+			for i := 1; i <= total; i ++ {
+				conn.Write([]byte(strconv.Itoa(i) + "\n"))
+			}
+			sleep := time.Duration(1000 / total)
+			time.Sleep(time.Millisecond * sleep)
+		}()
 	}
+
+	wg.Wait()
+
+	log.Println("error: ", errorNum)
+	log.Println("run time: ", time.Now().Unix() - startime, "s")
 }

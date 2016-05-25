@@ -6,21 +6,21 @@ import (
 	"os/signal"
 	"syscall"
 	"bufio"
-	"io"
 	"bytes"
-	"fmt"
 	"time"
 	"log"
+	"io/ioutil"
+	"io"
 )
 
 type logPack struct {
 	key     string
-	content string
+	content []byte
 }
 
 var SOCKET string = "/tmp/go-unix.socket"
 var LOGDIR string = "/tmp/go-unix-log/"
-var LOGMAX int = 10000;
+var LOGMAX int = 1000;
 
 var LOGKEY string = ""
 var LOGBUFFER bytes.Buffer
@@ -30,50 +30,46 @@ func flashLog() {
 		return
 	}
 
-	content := LOGBUFFER.String()
+	data := LOGBUFFER.Bytes()
+	length := len(data)
 
-	if (content == "") {
-		fmt.Println("buffer is empty")
+	if (length == 0) {
+		log.Println("buffer is empty")
 		return
 	}
 
 	var f *os.File
 	var err error
 
-	file := LOGDIR + LOGKEY + ".log"
+	file := LOGDIR + "debug.log"
 
-	if _, err = os.Stat(file); err == nil {
-		f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY, os.ModeAppend)
-	} else {
-		f, err = os.Create(file)
-	}
+	f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0644)
 
 	if err != nil {
 		log.Printf("open file %s error: %s", file, err.Error())
 		return
 	}
 	//写文件
-	writer := bufio.NewWriter(f)
-	defer f.Close()
-	if _, err = fmt.Fprint(writer, content); err != nil {
+	n, err := f.Write(data)
+	if err == nil && n < length {
+		err = io.ErrShortWrite
+	}
+	if err1 := f.Close(); err == nil {
+		err = err1
+	}
+	if err != nil {
 		log.Printf("write file %s error: %s", file, err.Error())
 		return
 	}
-
-	if err = writer.Flush(); err != nil {
-		log.Printf("flush file %s error: %s", file, err.Error())
-		return
-	}
-
-	fmt.Printf("save file %s\n", file)
+	log.Printf("save file %s\n", file)
 	LOGBUFFER.Reset()
 }
 
 func main() {
 	lognum := 0;
 
-	connchan := make(chan net.Conn, 128)
-	logchan := make(chan logPack, 128)
+	connchan := make(chan net.Conn, 1024)
+	logchan := make(chan logPack, 1024)
 
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, os.Interrupt)
@@ -111,10 +107,17 @@ func main() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				fmt.Print("get client connection error: ", err)
+				log.Println("connection error: ", err)
 				continue
 			}
-			connchan <- conn
+			select {
+			case connchan <- conn:
+			//do nothing
+			default:
+			//warnning!
+				log.Println("CONN_CHANNEL is full!")
+			}
+
 		}
 	}(linsten)
 
@@ -131,24 +134,18 @@ func main() {
 			go func(conn net.Conn) {
 				defer conn.Close()
 				reader := bufio.NewReader(conn)
-				var buffer bytes.Buffer
-				for {
-					data, err := reader.ReadString('\n')
-					if err != nil {
-						if err == io.EOF {
-							if data != "" {
-								buffer.WriteString(data)
-							}
-							break
-						}
-						fmt.Println(err)
-						return
-					}
-					buffer.WriteString(data)
+				data, err := ioutil.ReadAll(reader)
+				if err != nil {
+					log.Println(err)
+					return
 				}
-
-				logchan <- logPack{time.Now().Format("2006_01_02_1504"), buffer.String()}
-
+				select {
+				case logchan <- logPack{time.Now().Format("2006_01_02_1504"), data}:
+				//do nothing
+				default:
+				//warnning!
+					log.Println("LOG_CHANNEL is full!")
+				}
 			}(conn)
 		case log := <-logchan:
 			if LOGKEY == "" {
@@ -160,13 +157,13 @@ func main() {
 				LOGKEY = log.key
 				lognum = 0;
 			}
-			if (log.content != "") {
-				LOGBUFFER.WriteString(log.content)
+			if (len(log.content) != 0) {
+				LOGBUFFER.Write(log.content)
 				lognum ++
-				//fmt.Printf("[%d]add new log %s : %#v\n", lognum, log.key, log.content)
+				//log.Printf("[%d]add new log %s : %#v\n", lognum, log.key, log.content)
 			}
 		case <-time.After(time.Second * 60):
-			fmt.Println("auto flush log")
+			log.Println("auto flush log")
 			flashLog()
 		}
 	}
