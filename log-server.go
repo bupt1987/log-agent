@@ -1,8 +1,14 @@
 package main
 /**
+dev
 2016/05/27 01:39:36 total:  25600000
 2016/05/27 01:39:36 error:  0
 2016/05/27 01:39:36 run time: 32697.62 ms
+
+master
+2016/05/27 01:43:56 total:  25600000
+2016/05/27 01:43:56 error:  0
+2016/05/27 01:43:56 run time: 49095.38 ms
  */
 import (
 	"net"
@@ -114,7 +120,7 @@ func main() {
 					//		f.Close()
 					//	}
 					//}
-					time.Sleep(time.Millisecond * 1)
+					time.Sleep(time.Millisecond * 10)
 				}
 			}
 		}(n)
