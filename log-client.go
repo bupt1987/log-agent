@@ -6,15 +6,17 @@ import (
 	"time"
 	"log"
 	"sync"
+	"sync/atomic"
 )
 
 var SOCKET string = "/tmp/go-unix.socket"
 
 func main() {
+	var totalNum int32 = 0
 	errorNum := 0
-	lenght := 1000
+	lenght := 100
 
-	startime := time.Now().Unix()
+	startime := time.Now().UnixNano()
 
 	var wg sync.WaitGroup
 
@@ -34,17 +36,15 @@ func main() {
 			}
 
 			defer conn.Close()
-			total := 100
+			total := 100000
 			for i := 1; i <= total; i ++ {
-				conn.Write([]byte(strconv.Itoa(i) + "\n"))
+				conn.Write([]byte(strconv.FormatInt(time.Now().Unix(), 10) + "\n"))
+				atomic.AddInt32(&totalNum, 1)
 			}
-			sleep := time.Duration(1000 / total)
-			time.Sleep(time.Millisecond * sleep)
 		}()
 	}
-
 	wg.Wait()
-
+	log.Println("total: ", totalNum)
 	log.Println("error: ", errorNum)
-	log.Println("run time: ", time.Now().Unix() - startime, "s")
+	log.Printf("run time: %.2f ms", float64(time.Now().UnixNano() - startime) / 1000 / 1000)
 }

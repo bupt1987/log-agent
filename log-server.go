@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"time"
 	"log"
-	"io/ioutil"
 	"io"
 )
 
@@ -19,11 +18,16 @@ type logPack struct {
 }
 
 var SOCKET string = "/tmp/go-unix.socket"
-var LOGDIR string = "/tmp/go-unix-log/"
-var LOGMAX int = 1000;
+var LOGDIR string = "/go/logs/go-unix/"
 
 var LOGKEY string = ""
 var LOGBUFFER bytes.Buffer
+var LOGHANDLER *os.File
+var LOGMAXSIZE int = 1024 * 1024 * 10
+
+func getKey() string {
+	return time.Now().Format("2006_01_02_1504")
+}
 
 func flashLog() {
 	if LOGKEY == "" {
@@ -34,28 +38,25 @@ func flashLog() {
 	length := len(data)
 
 	if (length == 0) {
-		log.Println("buffer is empty")
 		return
 	}
 
-	var f *os.File
 	var err error
 
-	file := LOGDIR + "debug.log"
+	file := LOGDIR + LOGKEY + ".log"
 
-	f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0644)
+	if LOGHANDLER == nil {
+		LOGHANDLER, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
+	}
 
 	if err != nil {
 		log.Printf("open file %s error: %s", file, err.Error())
 		return
 	}
 	//写文件
-	n, err := f.Write(data)
+	n, err := LOGHANDLER.Write(data)
 	if err == nil && n < length {
 		err = io.ErrShortWrite
-	}
-	if err1 := f.Close(); err == nil {
-		err = err1
 	}
 	if err != nil {
 		log.Printf("write file %s error: %s", file, err.Error())
@@ -65,9 +66,29 @@ func flashLog() {
 	LOGBUFFER.Reset()
 }
 
-func main() {
-	lognum := 0;
+func pushLog(logchan chan logPack, data []byte, force bool) bool {
 
+	if (len(data) == 0) {
+		return false
+	}
+
+	select {
+	case logchan <- logPack{getKey(), data}:
+		return true
+	}
+
+	if force {
+		for {
+			select {
+			case logchan <- logPack{getKey(), data}:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func main() {
 	connchan := make(chan net.Conn, 1024)
 	logchan := make(chan logPack, 1024)
 
@@ -91,7 +112,6 @@ func main() {
 	}
 
 	//监听
-	// "unix", "unixgram" and "unixpacket".
 	linsten, err := net.Listen("unix", SOCKET)
 	if err != nil {
 		panic(err)
@@ -112,19 +132,16 @@ func main() {
 			}
 			select {
 			case connchan <- conn:
-			//do nothing
 			default:
-			//warnning!
-				log.Println("CONN_CHANNEL is full!")
+				conn.Close()
+				log.Println("connection channel is full!")
 			}
-
 		}
 	}(linsten)
 
 	for {
 		select {
 		case <-sigchan:
-			log.Println("exit")
 			flashLog()
 			if err := os.Remove(SOCKET); err != nil {
 				panic(err)
@@ -134,37 +151,52 @@ func main() {
 			go func(conn net.Conn) {
 				defer conn.Close()
 				reader := bufio.NewReader(conn)
-				data, err := ioutil.ReadAll(reader)
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				select {
-				case logchan <- logPack{time.Now().Format("2006_01_02_1504"), data}:
-				//do nothing
-				default:
-				//warnning!
-					log.Println("LOG_CHANNEL is full!")
+				var buffer bytes.Buffer
+				for {
+					data, err := reader.ReadBytes('\n')
+					if err != nil {
+						if err != io.EOF {
+							log.Println("read data error: ", err)
+							break
+						}
+						buffer.Write(data)
+						pushLog(logchan, buffer.Bytes(), true)
+						break
+					}
+					buffer.Write(data)
+					bPush := pushLog(logchan, buffer.Bytes(), false)
+					if bPush {
+						buffer.Reset()
+					}
 				}
 			}(conn)
-		case log := <-logchan:
+		case data := <-logchan:
 			if LOGKEY == "" {
-				LOGKEY = log.key
+				LOGKEY = data.key
 			}
-
-			if LOGKEY != log.key || lognum >= LOGMAX {
+			if LOGKEY != data.key {
 				flashLog()
-				LOGKEY = log.key
-				lognum = 0;
+				LOGKEY = data.key
+				LOGHANDLER.Close()
+				LOGHANDLER = nil
+			} else if LOGBUFFER.Len() >= LOGMAXSIZE {
+				flashLog()
 			}
-			if (len(log.content) != 0) {
-				LOGBUFFER.Write(log.content)
-				lognum ++
-				//log.Printf("[%d]add new log %s : %#v\n", lognum, log.key, log.content)
-			}
+			LOGBUFFER.Write(data.content)
+			time.Sleep(time.Second * 10)
+		//log.Printf("new log %s : %s", data.key, data.content)
 		case <-time.After(time.Second * 60):
-			log.Println("auto flush log")
+			key := getKey()
+			if LOGKEY == "" || LOGKEY == key {
+				continue
+			}
+			log.Println("auto flush log ", LOGKEY)
 			flashLog()
+			LOGKEY = key
+			if LOGHANDLER != nil {
+				LOGHANDLER.Close()
+				LOGHANDLER = nil
+			}
 		}
 	}
 }
