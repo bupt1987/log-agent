@@ -6,65 +6,21 @@ import (
 	"os/signal"
 	"syscall"
 	"bufio"
-	"bytes"
 	"time"
 	"log"
 	"io"
+	"test/safe"
+	"runtime"
+	"strconv"
 )
-
-type logPack struct {
-	key     string
-	content []byte
-}
 
 var sSocket string = "/tmp/go-unix.socket"
 var sLogDir string = "/go/logs/go-unix/"
-var sLogKey string = ""
-var bufLog bytes.Buffer
-var oLog *os.File
-var iLogMaxSize int = 1024 * 1024 * 1
-
-func getKey() string {
-	return time.Now().Format("2006_01_02_1504")
-}
-
-func flashLog() {
-	if sLogKey == "" {
-		return
-	}
-	data := bufLog.Bytes()
-	length := len(data)
-
-	if (length == 0) {
-		return
-	}
-	var err error
-	file := sLogDir + sLogKey + ".log"
-
-	if oLog == nil {
-		oLog, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
-	}
-
-	if err != nil {
-		log.Printf("open file %s error: %s", file, err.Error())
-		return
-	}
-	//写文件
-	n, err := oLog.Write(data)
-	if err == nil && n < length {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		log.Printf("write file %s error: %s", file, err.Error())
-		return
-	}
-	log.Printf("save file %s\n", file)
-	bufLog.Reset()
-}
 
 func main() {
+	iCpu := runtime.NumCPU()
+	queue := safe.NewQueue()
 	chConn := make(chan net.Conn, 1024)
-	chLog := make(chan logPack, 1024)
 
 	chSig := make(chan os.Signal)
 	signal.Notify(chSig, os.Interrupt)
@@ -97,7 +53,7 @@ func main() {
 
 	defer linsten.Close()
 
-	go func() {
+	go func(linsten net.Listener) {
 		for {
 			conn, err := linsten.Accept()
 			if err != nil {
@@ -106,39 +62,59 @@ func main() {
 			}
 			chConn <- conn
 		}
-	}()
+	}(linsten)
 
-	go func() {
-		for {
-			select {
-			case data := <-chLog:
-				if sLogKey == "" {
-					sLogKey = data.key
-				}
-				if sLogKey != data.key {
-					flashLog()
-					sLogKey = data.key
-					oLog.Close()
-					oLog = nil
-				} else if bufLog.Len() >= iLogMaxSize {
-					flashLog()
-				}
-				bufLog.Write(data.content)
-			case <-time.After(time.Second * 60):
-				key := getKey()
-				if sLogKey == "" || sLogKey == key {
-					continue
-				}
-				log.Println("auto flush log", sLogKey)
-				flashLog()
-				sLogKey = key
-				if oLog != nil {
-					oLog.Close()
-					oLog = nil
+	for n := 1; n <= iCpu; n ++ {
+		go func(n int) {
+			var f *os.File
+			for {
+				data := queue.Pop();
+				if data != nil {
+					//写文件
+					file := sLogDir + time.Now().Format("2006_01_02_1504") + "." + strconv.Itoa(n)
+					if f == nil || file != f.Name() {
+						if f != nil {
+							f.Close()
+						}
+						f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
+						if err != nil {
+							log.Printf("open file %s error: %s", file, err.Error())
+							continue
+						}
+					}
+					//写文件
+					b := data.([]byte)
+					n, err := f.Write(b)
+					if err == nil && n < len(b) {
+						err = io.ErrShortWrite
+					}
+					if err == os.ErrNotExist {
+						f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
+						if err != nil {
+							log.Printf("open file %s error: %s", file, err.Error())
+							continue
+						}
+					}
+					if err != nil {
+						log.Printf("write file %s error: %s", file, err.Error())
+						continue
+					}
+				} else {
+					//select {
+					//case <-time.After(time.Second * 60):
+					//	if f == nil {
+					//		continue
+					//	}
+					//	file := sLogDir + time.Now().Format("2006_01_02_1504") + "." + strconv.Itoa(n)
+					//	if f.Name() != file {
+					//		f.Close()
+					//	}
+					//}
+					time.Sleep(time.Millisecond * 1)
 				}
 			}
-		}
-	}()
+		}(n)
+	}
 
 	for {
 		select {
@@ -148,7 +124,6 @@ func main() {
 					panic(err)
 				}
 			}
-			flashLog()
 			return
 		case conn := <-chConn:
 			go func() {
@@ -157,16 +132,13 @@ func main() {
 				for {
 					data, err := reader.ReadBytes('\n')
 					if err != nil {
-						if err != io.EOF {
-							log.Println("read data error: ", err)
+						if err == io.EOF {
 							break
 						}
-						if len(data) > 0 {
-							chLog <- logPack{getKey(), data}
-						}
+						log.Println("read data error: ", err)
 						break
 					}
-					chLog <- logPack{getKey(), data}
+					queue.Push(data)
 				}
 			}()
 		}
