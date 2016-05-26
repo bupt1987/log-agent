@@ -14,7 +14,7 @@ var SOCKET string = "/tmp/go-unix.socket"
 func main() {
 	var totalNum int32 = 0
 	errorNum := 0
-	lenght := 100
+	lenght := 256
 
 	startime := time.Now().UnixNano()
 

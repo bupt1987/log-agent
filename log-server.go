@@ -17,36 +17,32 @@ type logPack struct {
 	content []byte
 }
 
-var SOCKET string = "/tmp/go-unix.socket"
-var LOGDIR string = "/go/logs/go-unix/"
-
-var LOGKEY string = ""
-var LOGBUFFER bytes.Buffer
-var LOGHANDLER *os.File
-var LOGMAXSIZE int = 1024 * 1024 * 10
+var sSocket string = "/tmp/go-unix.socket"
+var sLogDir string = "/go/logs/go-unix/"
+var sLogKey string = ""
+var bufLog bytes.Buffer
+var oLog *os.File
+var iLogMaxSize int = 1024 * 1024 * 1
 
 func getKey() string {
 	return time.Now().Format("2006_01_02_1504")
 }
 
 func flashLog() {
-	if LOGKEY == "" {
+	if sLogKey == "" {
 		return
 	}
-
-	data := LOGBUFFER.Bytes()
+	data := bufLog.Bytes()
 	length := len(data)
 
 	if (length == 0) {
 		return
 	}
-
 	var err error
+	file := sLogDir + sLogKey + ".log"
 
-	file := LOGDIR + LOGKEY + ".log"
-
-	if LOGHANDLER == nil {
-		LOGHANDLER, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
+	if oLog == nil {
+		oLog, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
 	}
 
 	if err != nil {
@@ -54,7 +50,7 @@ func flashLog() {
 		return
 	}
 	//写文件
-	n, err := LOGHANDLER.Write(data)
+	n, err := oLog.Write(data)
 	if err == nil && n < length {
 		err = io.ErrShortWrite
 	}
@@ -63,95 +59,101 @@ func flashLog() {
 		return
 	}
 	log.Printf("save file %s\n", file)
-	LOGBUFFER.Reset()
-}
-
-func pushLog(logchan chan logPack, data []byte, force bool) bool {
-
-	if (len(data) == 0) {
-		return false
-	}
-
-	select {
-	case logchan <- logPack{getKey(), data}:
-		return true
-	}
-
-	if force {
-		for {
-			select {
-			case logchan <- logPack{getKey(), data}:
-				return true
-			}
-		}
-	}
-	return false
+	bufLog.Reset()
 }
 
 func main() {
-	connchan := make(chan net.Conn, 1024)
-	logchan := make(chan logPack, 1024)
+	chConn := make(chan net.Conn, 1024)
+	chLog := make(chan logPack, 1024)
 
-	sigchan := make(chan os.Signal)
-	signal.Notify(sigchan, os.Interrupt)
-	signal.Notify(sigchan, os.Kill)
-	signal.Notify(sigchan, syscall.SIGTERM)
+	chSig := make(chan os.Signal)
+	signal.Notify(chSig, os.Interrupt)
+	signal.Notify(chSig, os.Kill)
+	signal.Notify(chSig, syscall.SIGTERM)
 
 	//删除socket文件
-	if _, err := os.Stat(SOCKET); err == nil {
-		if err := os.Remove(SOCKET); err != nil {
+	if _, err := os.Stat(sSocket); err == nil {
+		if err := os.Remove(sSocket); err != nil {
 			panic(err)
 		}
 	}
 
 	//创建log目录
-	if _, err := os.Stat(LOGDIR); err != nil {
-		if err := os.MkdirAll(LOGDIR, 0777); err != nil {
+	if _, err := os.Stat(sLogDir); err != nil {
+		if err := os.MkdirAll(sLogDir, 0777); err != nil {
 			panic(err)
 		}
 	}
 
 	//监听
-	linsten, err := net.Listen("unix", SOCKET)
+	linsten, err := net.Listen("unix", sSocket)
 	if err != nil {
 		panic(err)
 	}
 
-	if err := os.Chmod(SOCKET, 0777); err != nil {
+	if err := os.Chmod(sSocket, 0777); err != nil {
 		panic(err)
 	}
 
 	defer linsten.Close()
 
-	go func(ln net.Listener) {
+	go func() {
 		for {
-			conn, err := ln.Accept()
+			conn, err := linsten.Accept()
 			if err != nil {
-				log.Println("connection error: ", err)
+				log.Println("connection error:", err)
 				continue
 			}
+			chConn <- conn
+		}
+	}()
+
+	go func() {
+		for {
 			select {
-			case connchan <- conn:
-			default:
-				conn.Close()
-				log.Println("connection channel is full!")
+			case data := <-chLog:
+				if sLogKey == "" {
+					sLogKey = data.key
+				}
+				if sLogKey != data.key {
+					flashLog()
+					sLogKey = data.key
+					oLog.Close()
+					oLog = nil
+				} else if bufLog.Len() >= iLogMaxSize {
+					flashLog()
+				}
+				bufLog.Write(data.content)
+			case <-time.After(time.Second * 60):
+				key := getKey()
+				if sLogKey == "" || sLogKey == key {
+					continue
+				}
+				log.Println("auto flush log", sLogKey)
+				flashLog()
+				sLogKey = key
+				if oLog != nil {
+					oLog.Close()
+					oLog = nil
+				}
 			}
 		}
-	}(linsten)
+	}()
 
 	for {
 		select {
-		case <-sigchan:
-			flashLog()
-			if err := os.Remove(SOCKET); err != nil {
-				panic(err)
+		case <-chSig:
+			if _, err := os.Stat(sSocket); err == nil {
+				if err := os.Remove(sSocket); err != nil {
+					panic(err)
+				}
 			}
+			flashLog()
 			return
-		case conn := <-connchan:
-			go func(conn net.Conn) {
+		case conn := <-chConn:
+			go func() {
 				defer conn.Close()
 				reader := bufio.NewReader(conn)
-				var buffer bytes.Buffer
 				for {
 					data, err := reader.ReadBytes('\n')
 					if err != nil {
@@ -159,44 +161,14 @@ func main() {
 							log.Println("read data error: ", err)
 							break
 						}
-						buffer.Write(data)
-						pushLog(logchan, buffer.Bytes(), true)
+						if len(data) > 0 {
+							chLog <- logPack{getKey(), data}
+						}
 						break
 					}
-					buffer.Write(data)
-					bPush := pushLog(logchan, buffer.Bytes(), false)
-					if bPush {
-						buffer.Reset()
-					}
+					chLog <- logPack{getKey(), data}
 				}
-			}(conn)
-		case data := <-logchan:
-			if LOGKEY == "" {
-				LOGKEY = data.key
-			}
-			if LOGKEY != data.key {
-				flashLog()
-				LOGKEY = data.key
-				LOGHANDLER.Close()
-				LOGHANDLER = nil
-			} else if LOGBUFFER.Len() >= LOGMAXSIZE {
-				flashLog()
-			}
-			LOGBUFFER.Write(data.content)
-			time.Sleep(time.Second * 10)
-		//log.Printf("new log %s : %s", data.key, data.content)
-		case <-time.After(time.Second * 60):
-			key := getKey()
-			if LOGKEY == "" || LOGKEY == key {
-				continue
-			}
-			log.Println("auto flush log ", LOGKEY)
-			flashLog()
-			LOGKEY = key
-			if LOGHANDLER != nil {
-				LOGHANDLER.Close()
-				LOGHANDLER = nil
-			}
+			}()
 		}
 	}
 }
