@@ -19,7 +19,7 @@ import (
 	"time"
 	"log"
 	"io"
-	"test/safe"
+	"./safe"
 	"runtime"
 	"strconv"
 )
