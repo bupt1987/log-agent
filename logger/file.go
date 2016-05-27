@@ -36,7 +36,6 @@ func (w FileLogger) Write(n int, lQueue []*safe.Queue) {
 		if data == nil {
 			return
 		}
-		//写文件
 		file := w.dir + time.Now().Format("2006_01_02_1504") + "." + strconv.Itoa(n)
 		if f == nil || file != f.Name() {
 			if f != nil {
@@ -48,18 +47,10 @@ func (w FileLogger) Write(n int, lQueue []*safe.Queue) {
 				continue
 			}
 		}
-		//写文件
-		b := data.([]byte)
-		n, err := f.Write(b)
-		if err == nil && n < len(b) {
+		d := data.([]byte)
+		n, err := f.Write(d)
+		if err == nil && n < len(d) {
 			err = io.ErrShortWrite
-		}
-		if err == os.ErrNotExist {
-			f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
-			if err != nil {
-				log.Printf("open file %s error: %s", file, err.Error())
-				continue
-			}
 		}
 		if err != nil {
 			log.Printf("write file %s error: %s", file, err.Error())

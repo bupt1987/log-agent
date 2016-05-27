@@ -36,11 +36,13 @@ import (
 func main() {
 	socket := "/tmp/go-unix.socket"
 	dir := "/go/logs/go-unix/"
-
 	iNum := runtime.NumCPU()
 	lQueue := make([]*safe.Queue, iNum)
 	chConn := make(chan net.Conn, 10)
 	chSig := make(chan os.Signal)
+	signal.Notify(chSig, os.Interrupt)
+	signal.Notify(chSig, os.Kill)
+	signal.Notify(chSig, syscall.SIGTERM)
 
 	//删除socket文件
 	if _, err := os.Stat(socket); err == nil {
@@ -65,9 +67,9 @@ func main() {
 
 	for n := 0; n < iNum; n ++ {
 		go func(n int, lQueue []*safe.Queue) {
-			logWriter := logger.NewFileLogger(dir)
+			writer := logger.NewFileLogger(dir)
 			for {
-				logWriter.Write(n, lQueue)
+				writer.Write(n, lQueue)
 				time.Sleep(time.Second)
 			}
 		}(n, lQueue)
@@ -84,10 +86,6 @@ func main() {
 		}
 	}(linsten)
 
-	signal.Notify(chSig, os.Interrupt)
-	signal.Notify(chSig, os.Kill)
-	signal.Notify(chSig, syscall.SIGTERM)
-
 	log.Println("running")
 
 	for {
@@ -100,17 +98,17 @@ func main() {
 			}
 			return
 		case conn := <-chConn:
-			go func(iCpu int) {
+			go func(iNum int) {
 				defer conn.Close()
 				reader := bufio.NewReader(conn)
 				var buffer bytes.Buffer
 				for {
 					data, err := reader.ReadBytes('\n')
-					if err == nil {
+					if len(data) > 0 {
 						buffer.Write(data)
 					}
 					if (buffer.Len() >= 512000 || err == io.EOF) {
-						lQueue[int(time.Now().Unix()) % iCpu].Push(buffer.Bytes())
+						lQueue[int(time.Now().Unix()) % iNum].Push(buffer.Bytes())
 						buffer.Reset()
 					}
 					if err != nil {
@@ -122,5 +120,6 @@ func main() {
 				}
 			}(iNum)
 		}
+
 	}
 }
