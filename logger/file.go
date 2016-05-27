@@ -1,4 +1,4 @@
-package writer
+package logger
 
 import (
 	"../safe"
@@ -9,12 +9,16 @@ import (
 	"io"
 )
 
-type FileWriter struct {
+type Logger interface {
+	Write(n int, lQueue []*safe.Queue)
+}
+
+type FileLogger struct {
 	dir string
 }
 
-func NewWriter(dir string) *FileWriter {
-	w := FileWriter{dir}
+func NewFileLogger(dir string) *FileLogger {
+	w := FileLogger{dir}
 	//创建log目录
 	if _, err := os.Stat(dir); err != nil {
 		if err := os.MkdirAll(dir, 0777); err != nil {
@@ -24,7 +28,7 @@ func NewWriter(dir string) *FileWriter {
 	return &w
 }
 
-func (w FileWriter) Write(n int, lQueue []*safe.Queue) {
+func (w FileLogger) Write(n int, lQueue []*safe.Queue) {
 	var f *os.File
 	var err error
 	for {

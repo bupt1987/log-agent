@@ -29,46 +29,49 @@ import (
 	"./safe"
 	"runtime"
 	"bytes"
-	"./writer"
+	"./logger"
 	"time"
 )
 
 func main() {
-	var sSocket string = "/tmp/go-unix.socket"
-	var sLogDir string = "/go/logs/go-unix/"
+	socket := "/tmp/go-unix.socket"
+	dir := "/go/logs/go-unix/"
 
-	var iCpu int = runtime.NumCPU()
-	lQueue := make([]*safe.Queue, iCpu)
-	chConn := make(chan net.Conn, 1024)
+	iNum := runtime.NumCPU()
+	lQueue := make([]*safe.Queue, iNum)
+	chConn := make(chan net.Conn, 10)
 	chSig := make(chan os.Signal)
-	logWriter := writer.NewWriter(sLogDir)
-
-	signal.Notify(chSig, os.Interrupt)
-	signal.Notify(chSig, os.Kill)
-	signal.Notify(chSig, syscall.SIGTERM)
-
-	for i := 0; i < iCpu; i ++ {
-		lQueue[i] = safe.NewQueue()
-	}
 
 	//删除socket文件
-	if _, err := os.Stat(sSocket); err == nil {
-		if err := os.Remove(sSocket); err != nil {
+	if _, err := os.Stat(socket); err == nil {
+		if err := os.Remove(socket); err != nil {
 			panic(err)
 		}
 	}
 
 	//监听
-	linsten, err := net.Listen("unix", sSocket)
+	linsten, err := net.Listen("unix", socket)
 	if err != nil {
 		panic(err)
 	}
 
-	if err := os.Chmod(sSocket, 0777); err != nil {
+	if err := os.Chmod(socket, 0777); err != nil {
 		panic(err)
 	}
 
-	defer linsten.Close()
+	for i := 0; i < iNum; i ++ {
+		lQueue[i] = safe.NewQueue()
+	}
+
+	for n := 0; n < iNum; n ++ {
+		go func(n int, lQueue []*safe.Queue) {
+			logWriter := logger.NewFileLogger(dir)
+			for {
+				logWriter.Write(n, lQueue)
+				time.Sleep(time.Second)
+			}
+		}(n, lQueue)
+	}
 
 	go func(linsten net.Listener) {
 		for {
@@ -81,22 +84,17 @@ func main() {
 		}
 	}(linsten)
 
-	for n := 0; n < iCpu; n ++ {
-		go func(n int, lQueue []*safe.Queue) {
-			for {
-				logWriter.Write(n, lQueue)
-				time.Sleep(time.Millisecond * 3)
-			}
-		}(n, lQueue)
-	}
+	signal.Notify(chSig, os.Interrupt)
+	signal.Notify(chSig, os.Kill)
+	signal.Notify(chSig, syscall.SIGTERM)
 
 	log.Println("running")
 
 	for {
 		select {
 		case <-chSig:
-			if _, err := os.Stat(sSocket); err == nil {
-				if err := os.Remove(sSocket); err != nil {
+			if _, err := os.Stat(socket); err == nil {
+				if err := os.Remove(socket); err != nil {
 					panic(err)
 				}
 			}
@@ -122,7 +120,7 @@ func main() {
 						break
 					}
 				}
-			}(iCpu)
+			}(iNum)
 		}
 	}
 }
