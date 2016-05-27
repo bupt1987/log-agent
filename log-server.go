@@ -5,6 +5,14 @@ dev
 2016/05/27 01:39:36 error:  0
 2016/05/27 01:39:36 run time: 32697.62 ms
 
+2016/05/27 14:15:31 total:  25600000
+2016/05/27 14:15:31 error:  0
+2016/05/27 14:15:31 run time: 23124.78 ms
+
+2016/05/27 14:17:42 total:  25600000
+2016/05/27 14:17:42 error:  0
+2016/05/27 14:17:42 run time: 10096.48 ms
+
 master
 2016/05/27 01:43:56 total:  25600000
 2016/05/27 01:43:56 error:  0
@@ -16,37 +24,36 @@ import (
 	"os/signal"
 	"syscall"
 	"bufio"
-	"time"
 	"log"
 	"io"
 	"./safe"
 	"runtime"
-	"strconv"
+	"bytes"
+	"./writer"
+	"time"
 )
 
-var sSocket string = "/tmp/go-unix.socket"
-var sLogDir string = "/go/logs/go-unix/"
-
 func main() {
-	iCpu := runtime.NumCPU()
-	queue := safe.NewQueue()
-	chConn := make(chan net.Conn, 1024)
+	var sSocket string = "/tmp/go-unix.socket"
+	var sLogDir string = "/go/logs/go-unix/"
 
+	var iCpu int = runtime.NumCPU()
+	lQueue := make([]*safe.Queue, iCpu)
+	chConn := make(chan net.Conn, 1024)
 	chSig := make(chan os.Signal)
+	logWriter := writer.NewWriter(sLogDir)
+
 	signal.Notify(chSig, os.Interrupt)
 	signal.Notify(chSig, os.Kill)
 	signal.Notify(chSig, syscall.SIGTERM)
 
+	for i := 0; i < iCpu; i ++ {
+		lQueue[i] = safe.NewQueue()
+	}
+
 	//删除socket文件
 	if _, err := os.Stat(sSocket); err == nil {
 		if err := os.Remove(sSocket); err != nil {
-			panic(err)
-		}
-	}
-
-	//创建log目录
-	if _, err := os.Stat(sLogDir); err != nil {
-		if err := os.MkdirAll(sLogDir, 0777); err != nil {
 			panic(err)
 		}
 	}
@@ -74,57 +81,16 @@ func main() {
 		}
 	}(linsten)
 
-	for n := 1; n <= iCpu; n ++ {
-		go func(n int) {
-			var f *os.File
+	for n := 0; n < iCpu; n ++ {
+		go func(n int, lQueue []*safe.Queue) {
 			for {
-				data := queue.Pop();
-				if data != nil {
-					//写文件
-					file := sLogDir + time.Now().Format("2006_01_02_1504") + "." + strconv.Itoa(n)
-					if f == nil || file != f.Name() {
-						if f != nil {
-							f.Close()
-						}
-						f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
-						if err != nil {
-							log.Printf("open file %s error: %s", file, err.Error())
-							continue
-						}
-					}
-					//写文件
-					b := data.([]byte)
-					n, err := f.Write(b)
-					if err == nil && n < len(b) {
-						err = io.ErrShortWrite
-					}
-					if err == os.ErrNotExist {
-						f, err = os.OpenFile(file, os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0664)
-						if err != nil {
-							log.Printf("open file %s error: %s", file, err.Error())
-							continue
-						}
-					}
-					if err != nil {
-						log.Printf("write file %s error: %s", file, err.Error())
-						continue
-					}
-				} else {
-					//select {
-					//case <-time.After(time.Second * 60):
-					//	if f == nil {
-					//		continue
-					//	}
-					//	file := sLogDir + time.Now().Format("2006_01_02_1504") + "." + strconv.Itoa(n)
-					//	if f.Name() != file {
-					//		f.Close()
-					//	}
-					//}
-					time.Sleep(time.Millisecond * 10)
-				}
+				logWriter.Write(n, lQueue)
+				time.Sleep(time.Millisecond * 3)
 			}
-		}(n)
+		}(n, lQueue)
 	}
+
+	log.Println("running")
 
 	for {
 		select {
@@ -136,21 +102,27 @@ func main() {
 			}
 			return
 		case conn := <-chConn:
-			go func() {
+			go func(iCpu int) {
 				defer conn.Close()
 				reader := bufio.NewReader(conn)
+				var buffer bytes.Buffer
 				for {
 					data, err := reader.ReadBytes('\n')
+					if err == nil {
+						buffer.Write(data)
+					}
+					if (buffer.Len() >= 512000 || err == io.EOF) {
+						lQueue[int(time.Now().Unix()) % iCpu].Push(buffer.Bytes())
+						buffer.Reset()
+					}
 					if err != nil {
-						if err == io.EOF {
-							break
+						if err != io.EOF {
+							log.Println("read log error:", err.Error())
 						}
-						log.Println("read data error: ", err)
 						break
 					}
-					queue.Push(data)
 				}
-			}()
+			}(iCpu)
 		}
 	}
 }

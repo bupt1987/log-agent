@@ -37,8 +37,9 @@ func main() {
 
 			defer conn.Close()
 			total := 100000
+			json := "{\"test\":" + strconv.FormatInt(time.Now().Unix(), 10) + ",\"hello world\":{\"time\":11133322}}\n"
 			for i := 1; i <= total; i ++ {
-				conn.Write([]byte(strconv.FormatInt(time.Now().Unix(), 10) + "\n"))
+				conn.Write([]byte(json))
 				atomic.AddInt32(&totalNum, 1)
 			}
 		}()
