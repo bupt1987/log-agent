@@ -13,11 +13,20 @@ import (
 	"bytes"
 	"./logger"
 	"time"
+	"flag"
+	"fmt"
 )
 
 func main() {
-	socket := "/tmp/go-unix.socket"
-	dir := "/go/logs/go-unix/"
+	socket := *flag.String("socket", "/tmp/log-agent.socket", "Listen socket address")
+	dir := *flag.String("to", "/go/logs/", "Log store to address")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS] [name ...]\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
 	iNum := runtime.NumCPU()
 	lQueue := make([]*safe.Queue, iNum)
 	chConn := make(chan net.Conn, 10)
@@ -25,6 +34,8 @@ func main() {
 	signal.Notify(chSig, os.Interrupt)
 	signal.Notify(chSig, os.Kill)
 	signal.Notify(chSig, syscall.SIGTERM)
+
+	log.Println(socket)
 
 	//删除socket文件
 	if _, err := os.Stat(socket); err == nil {
@@ -34,7 +45,7 @@ func main() {
 	}
 
 	//监听
-	linsten, err := net.Listen("unix", socket)
+	listen, err := net.Listen("unix", socket)
 	if err != nil {
 		panic(err)
 	}
@@ -57,16 +68,16 @@ func main() {
 		}(n, lQueue)
 	}
 
-	go func(linsten net.Listener) {
+	go func(listen net.Listener) {
 		for {
-			conn, err := linsten.Accept()
+			conn, err := listen.Accept()
 			if err != nil {
 				log.Println("connection error:", err)
 				continue
 			}
 			chConn <- conn
 		}
-	}(linsten)
+	}(listen)
 
 	log.Println("running")
 

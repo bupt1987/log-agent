@@ -2,7 +2,7 @@
 /**
  * Description:
  */
-$sFluentSock = '/tmp/go-unix.socket';
+$sFluentSock = '/tmp/log-agent.socket';
 $socket = @stream_socket_client('unix://' . $sFluentSock, $errno, $errstr, 3, \STREAM_CLIENT_CONNECT | \STREAM_CLIENT_PERSISTENT);
 
 $sKey = "socket_test";

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 )
 
-var SOCKET string = "/tmp/go-unix.socket"
+var SOCKET string = "/tmp/log-agent.socket"
 
 func main() {
 	var totalNum int32 = 0
