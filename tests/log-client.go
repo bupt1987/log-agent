@@ -36,14 +36,15 @@ func main() {
 			}
 
 			defer conn.Close()
-			total := 500000
-			//json := "{\"test\":" + strconv.FormatInt(time.Now().Unix(), 10) + ",\"hello world\":{\"time\":11133322}}\n"
-			json := strconv.FormatInt(time.Now().Unix(), 10) + "\n"
+			total := 20000000
+			json := "{\"test\":" + strconv.FormatInt(time.Now().Unix(), 10) + ",\"hello world\":{\"time\":11133322}}\n"
+			//json := strconv.FormatInt(time.Now().Unix() / 10, 10) + "\n"
 			for i := 1; i <= total; i ++ {
 				conn.Write([]byte(json))
 				atomic.AddInt32(&totalNum, 1)
 			}
 		}()
+		time.Sleep(time.Millisecond * 100)
 	}
 	wg.Wait()
 	log.Println("total: ", totalNum)
