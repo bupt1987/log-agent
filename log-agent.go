@@ -8,14 +8,15 @@ import (
 	"bufio"
 	"log"
 	"io"
-	"./safe"
 	"runtime"
 	"bytes"
-	"./logger"
 	"time"
 	"flag"
 	"fmt"
 	"math/rand"
+
+	"github.com/bupt1987/log-agent/safe"
+	"github.com/bupt1987/log-agent/logger"
 )
 
 /**
